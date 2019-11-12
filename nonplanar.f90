@@ -12,11 +12,11 @@ program main
   integer,allocatable::nm(:,:),nc(:) !1 right 2:left
   real(8)::dt,dx,t,tp,tr,mu,dc,tau0,et,x,y,r,sin2,cos2,kern11,kern12,kern22,up,ur,ang
   real(8),allocatable::xtl(:),xtr(:),ytl(:),ytr(:)
-  real(8)::hypox,hypoy,time1,time2,time3,time4,tmp1,tmp2
+  real(8)::hypox,hypoy,time1,time2,time3,time4,tmp1,tmp2,factor,rad
   real(8),parameter::cs=1.d0,pi=4.d0*atan(1.d0),cp=cs*sqrt(3d0)
   integer::i,j,k,n,imax,kmax,p,q,filesize,rn,nf
-  integer::ierr,imax_,icomm,np,amari,my_rank
-  character(128)::geofile,command
+  integer::ierr,imax_,icomm,np,amari,my_rank,stat
+  character(128)::filename,command
 
   dx=0.05d0
   dt=dx*0.5d0
@@ -33,13 +33,19 @@ program main
   !xtl(1)=0d0;ytl(1)=0d0;xtr(1)=3d0;ytr(1)=0d0;nc(1)=floor(sqrt((xtl(1)-xtr(1))**2+(ytl(1)-ytr(1))**2)/dx)
   !xtl(2)=2d0;ytl(2)=-2d0;xtr(2)=2d0;ytr(2)=0.5d0;nc(2)=floor(sqrt((xtl(2)-xtr(2))**2+(ytl(2)-ytr(2))**2)/dx)
 
-!step-over
-  nf=3
+!step-oveir
+  call get_command_argument(1,filename,status=stat)
+  open(30,file=filename)
+  read(30,*) nf
   allocate(xtl(nf),xtr(nf),ytl(nf),ytr(nf),nc(nf))
-  xtl(1)=0d0;ytl(1)=0d0;xtr(1)=7d0;ytr(1)=0d0
-  xtl(2)=3d0;ytl(2)=-0.3d0;xtr(2)=14d0;ytr(2)=-0.3d0
-  xtl(3)=10d0;ytl(3)=0d0;xtr(3)=16d0;ytr(3)=0d0
-  hypox=2.0d0;hypoy=0d0
+  do i=1,nf
+  read(30,*) xtl(i),ytl(i),xtr(i),ytr(i)
+  end do
+  read(30,*) hypox,hypoy
+  !xtl(1)=0d0;ytl(1)=0d0;xtr(1)=7d0;ytr(1)=0d0
+  !xtl(2)=3d0;ytl(2)=-0.3d0;xtr(2)=14d0;ytr(2)=-0.3d0
+  !xtl(3)=10d0;ytl(3)=0d0;xtr(3)=16d0;ytr(3)=0d0
+  !hypox=2.0d0;hypoy=0d0
   !write(*,*) sum(xtl(2:1))
 !stop
   do i=1,nf
@@ -202,7 +208,7 @@ program main
     end do
     time4= MPI_Wtime()
     !write(*,*) my_rank,time4-time3
-    call MPI_BARRIER(MPI_COMM_WORLD,ierr)
+    !call MPI_BARRIER(MPI_COMM_WORLD,ierr)
     call MPI_ALLGATHERv(summn,imax_,MPI_REAL8,summng,rcounts,displs,  MPI_REAL8,MPI_COMM_WORLD,ierr)
     call MPI_ALLGATHERv(summt,imax_,MPI_REAL8,summtg,rcounts,displs,  MPI_REAL8,MPI_COMM_WORLD,ierr)
 
@@ -214,9 +220,16 @@ program main
     do i=1,imax
       tp=up*max(0d0,normal(i))
       tr=ur*max(0d0,normal(i))
+      rad=2*cs**2/cp/mu
+      factor=rad*0.5d0*dt*(tp-tr)/dc
       if(state(i).eq.1) then
         !write(*,*) k,max(0.d0,th*(1.d0-disp(i)/dc)),tau(i)
-      vel(k,i)=cs/cp*(-2.d0*cs/mu*(max(tr,tr+(tp-tr)*(1.d0-disp(i)/dc))-tau(i))-summtg(i))
+        if(disp(i).le.dc) then
+          vel(k,i)=1/(1+factor)*cs/cp*(-2.d0*cs/mu*(tr+(tp-tr)*(1.d0-(disp(i)+0.5d0*dt*vel(k-1,i))/dc)-tau(i))-summtg(i))
+          vel(k,i)=0.5d0*(vel(k-1,i)+vel(k,i))
+        else
+          vel(k,i)=cs/cp*(-2d0*cs/mu*(tr-tau(i))-summtg(i))
+        end if
     else if(tau(i)-mu/2.d0/cs*summtg(i).gt.tp) then
       state(i)=1
       rupt(i)=k*dt
@@ -242,7 +255,7 @@ program main
     !write(12,*)
     t=t+dt
     time2= MPI_Wtime()
-    if(mod(k,10).eq.0 .and. my_rank.eq.0) write(*,*) 'time step=',k,time2-time1
+    if(mod(k,10).eq.0 .and. my_rank.eq.0) write(*,*) 'time step=',k,time2-time1,maxval(vel(k,:))
     ! if(maxval(vel(k,:)).le.0.00001d0) then
     !   write(*,*) k,'slip rate zero'
     !   exit
