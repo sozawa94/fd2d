@@ -23,7 +23,7 @@ program main
   dx=0.05d0
   dt=dx*0.5d0
   mu=1.d0
-  fdc=0.01d0
+  fdc=0.003d0
   et=0.8d0
 
   S0=0.4d0
@@ -188,6 +188,7 @@ program main
   t=0d0
   N0=1d0
   P(0,:)=0.5d0
+  v=0d0
   do i=1,imax
     V(0,i)=fv0*exp((S0(i)/N0(i)-P(0,i))/fa)
     !write(*,*) i,V(0,i)
@@ -229,12 +230,13 @@ program main
     end do
     !if(vel(i,k)) known, calculate stress directly
     !if(vel(i,k)) unknown, combine with friction law to solve
+  !if(my_rank.eq.0) then
     do i=1,imax
       dpdt=fb/fdc*(fv0*exp((p0-p(k-1,i))/fb)-V(k-1,i))
       P(k,i)=P(k-1,i)+dt*dpdt
       !write(*,*) i,P(k,i)
       !p(k,i)=p(k-1,i)+dt*(1-vel(k-1,i)*p(k-1,i)/dc)
-      lnv=rtnewt(dlog(V(k-1,i)/fv0),1d-3,N(i),P(k,i),S0(i),summt(i))
+      lnv=rtnewt(dlog(V(k-1,i)/fv0),1d-4,N(i),P(k,i),S0(i),summtg(i))
       V(k,i)=fv0*exp(lnv)
       if(V(k,i).gt.0.1d0) state(i)=1
     end do
@@ -251,7 +253,9 @@ program main
     end do
     write(12,*)
   end if
-    !write(12,*)
+  !call MPI_BARRIER(MPI_COMM_WORLD,ierr)
+  !call MPI_Bcast(V, size(V), MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
+    !write(*,*) V(k,:)
     t=t+dt
     time2= MPI_Wtime()
     if(mod(k,10).eq.0 .and. my_rank.eq.0) write(*,*) 'time step=',k,time2-time1,maxval(V(k,:))
