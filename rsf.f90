@@ -1,29 +1,45 @@
 program main
   !$ use omp_lib
   implicit none
-  !2D in-plane full-dynamic BIEM with slip weakening friction law.
-  !based on Ando et al., 2007.
-  !developed by SO OZAWA, master student at UTokyo
+  !2D in-plane full-dynamic BIEM with rate and state friction law.
+  !developed by SO OZAWA, PhD student at Univ. Tokyo
   include 'mpif.h'
+
+  !elastodynamic convolution kernel for shear and normal stress respectively.
+  integer::imax,kmax
+  real(8)::dt,dx
   real(8),allocatable::kernt(:,:,:),kernn(:,:,:)
-  real(8),allocatable::V(:,:),P(:,:),D(:),summt(:),summn(:),S0(:),S(:),N0(:),N(:),rupt(:)
+
+  !physical variables
+  real(8),allocatable::V(:,:),P(:),D(:),S0(:),S(:),N0(:),N(:),rupt(:)
+  integer,allocatable::state(:)
+
+  !physical constants
+  real(8),parameter::cs=1.d0,pi=4.d0*atan(1.d0),cp=cs*sqrt(3d0),mu=1.d0
+  real(8)::ff0,fv0,fp0,fdc,fa,fb,p0
+
+  !for fault geometry and nucleation location
   real(8),allocatable::xcol(:),ycol(:),xel(:),xer(:),yel(:),yer(:),nx(:),ny(:),xr(:),yr(:),ds(:)
-  real(8),allocatable::xcol_(:),ycol_(:),nx_(:),ny_(:),summtg(:),summng(:)
-  integer,allocatable::state(:),rcounts(:),displs(:) !0:locked 1:slipping
-  integer,allocatable::nm(:,:),nc(:) !1 right 2:left
-  real(8)::dt,dx,t,tp,tr,mu,tau0,et,x,y,r,sin2,cos2,kern11,kern12,kern22,up,ur,ang
-  real(8)::ff0,fv0,fp0,fdc,fa,fb,p0,dpdt,lnv
   real(8),allocatable::xtl(:),xtr(:),ytl(:),ytr(:)
-  real(8)::hypox,hypoy,time1,time2,time3,time4,tmp1,tmp2,factor,rad
-  real(8),parameter::cs=1.d0,pi=4.d0*atan(1.d0),cp=cs*sqrt(3d0)
-  integer::i,j,k,m,imax,kmax,q,filesize,rn,nf
+  integer,allocatable::nm(:,:),nc(:)
+  real(8),allocatable::xcol_(:),ycol_(:),nx_(:),ny_(:)
+  real(8)::hypox,hypoy !hypocenter
+
+  !for MPI communication and performance evaluation
+  integer,allocatable::rcounts(:),displs(:)
   integer::ierr,imax_,icomm,np,amari,my_rank,stat
+  real(8)::time1,time2,time3,time4
+
+  !others (i.e. temporal memory, variables for loops...)
+  real(8),allocatable::summt(:),summn(:),summtg(:),summng(:)
+  real(8)::tmp1,tmp2,t,tp,tr,tau0,et,x,y,r,sin2,cos2,kern11,kern12,kern22,up,ur,ang
+  real(8)::factor,rad,dpdt,lnv
+  integer::i,j,k,m,filesize,rn,nf,q
   character(128)::filename,command
 
   dx=0.05d0
   dt=dx*0.5d0
-  mu=1.d0
-  fdc=0.003d0
+  fdc=0.005d0
   et=0.8d0
 
   S0=0.4d0
@@ -39,7 +55,7 @@ program main
   !xtl(1)=0d0;ytl(1)=0d0;xtr(1)=3d0;ytr(1)=0d0;nc(1)=floor(sqrt((xtl(1)-xtr(1))**2+(ytl(1)-ytr(1))**2)/dx)
   !xtl(2)=2d0;ytl(2)=-2d0;xtr(2)=2d0;ytr(2)=0.5d0;nc(2)=floor(sqrt((xtl(2)-xtr(2))**2+(ytl(2)-ytr(2))**2)/dx)
 
-!step-oveir
+  !fault geometry by input file
   call get_command_argument(1,filename,status=stat)
   open(30,file=filename)
   read(30,*) nf
@@ -58,14 +74,12 @@ program main
     nc(i)=floor(sqrt((xtl(i)-xtr(i))**2+(ytl(i)-ytr(i))**2)/dx)
   end do
 
-
+  !determine the number of elements and time step
   imax=sum(nc)
   kmax=imax*3+1
-  !write(command,"('sed -i -e 's/nstep/',i0,'/g' gnu.gp')") kmax
-  !call system(command)
   if(my_rank.eq.0) write(*,*) 'n,kmax',imax,kmax
 
-  !initialize
+  !MPI routine
   icomm=MPI_COMM_WORLD
   call MPI_INIT(ierr)
   call MPI_COMM_SIZE(MPI_COMM_WORLD,np,ierr )
@@ -85,11 +99,12 @@ program main
   imax_=rcounts(my_rank+1)
   write(*,*) imax_
 
-  allocate(kernt(0:kmax,imax,imax_),kernn(0:kmax,imax,imax_),V(0:kmax,imax),P(0:kmax,imax),D(imax),summt(imax_),summn(imax_),S0(imax),N0(imax),summtg(imax),summng(imax),rupt(imax))
+  allocate(kernt(0:kmax,imax,imax_),kernn(0:kmax,imax,imax_),V(0:kmax,imax),P(imax),D(imax),summt(imax_),summn(imax_),S0(imax),N0(imax),summtg(imax),summng(imax),rupt(imax))
   allocate(xcol(imax),ycol(imax),nx(imax),ny(imax),state(imax),S(imax),N(imax))
   allocate(xcol_(imax_),ycol_(imax_),nx_(imax_),ny_(imax_),nm(imax,imax_))
   allocate(xr(imax+1),yr(imax+1),ds(imax),xel(imax),xer(imax),yel(imax),yer(imax))
 
+  !mesh generation
   do k=1,nf
     do i=0,nc(k)
       xr(i)=xtl(k)+(xtr(k)-xtl(k))*i/nc(k)
@@ -120,6 +135,7 @@ program main
    call MPI_SCATTERv(nx,rcounts,displs,MPI_REAL8,nx_,imax_,MPI_REAL8,0,MPI_COMM_WORLD,ierr)
    call MPI_SCATTERv(ny,rcounts,displs,MPI_REAL8,ny_,imax_,MPI_REAL8,0,MPI_COMM_WORLD,ierr)
 
+
   !kernel computation
   time1=MPI_Wtime()
   do i=1,imax_
@@ -134,14 +150,13 @@ program main
       !write(*,*) nm(i,j)
       !sin2=-2*nx(i)*ny(i)
       !cos2=ny(i)**2-nx(i)**2
-
       do k=0,kmax
         kern11=inte11(x+0.5d0*ds(j),y,(k+et)*dt)-inte11(x-0.5d0*ds(j),y,(k+et)*dt)-inte11(x+0.5d0*ds(j),y,(k-1+et)*dt)+inte11(x-0.5d0*ds(j),y,(k-1+et)*dt)
         kern12=inte12(x+0.5d0*ds(j),y,(k+et)*dt)-inte12(x-0.5d0*ds(j),y,(k+et)*dt)-inte12(x+0.5d0*ds(j),y,(k-1+et)*dt)+inte12(x-0.5d0*ds(j),y,(k-1+et)*dt)
         kern22=inte22(x+0.5d0*ds(j),y,(k+et)*dt)-inte22(x-0.5d0*ds(j),y,(k+et)*dt)-inte22(x+0.5d0*ds(j),y,(k-1+et)*dt)+inte22(x-0.5d0*ds(j),y,(k-1+et)*dt)
 
         kernt(k,j,i)=0.5d0*(kern11-kern22)*sin2+kern12*cos2
-        kernn(k,j,i)=0.5d0*(kern11+kern22)-0.5d0*(kern11-kern22)*cos2-kern12*sin2
+        kernn(k,j,i)=-(0.5d0*(kern11+kern22)-0.5d0*(kern11-kern22)*cos2-kern12*sin2)
         !if(abs(kernn(i,j,k)).le.1d-8) kernn(k,j,i)=0d0
         !write(25,'(3i6,4e15.6)') i,j,k,kernt(i,j,k),kernn(i,j,k)
       end do
@@ -149,7 +164,7 @@ program main
     end do
     !write(25,*)
   end do
-  kernn=-kernn
+  !kernn=-kernn
   !write(*,*)minval(kernt),minval(kernn)
 
   i=50
@@ -187,10 +202,10 @@ program main
   call initialcrack(hypox,hypoy,xcol,ycol,S0,imax,dx)
   t=0d0
   N0=1d0
-  P(0,:)=0.5d0
-  v=0d0
+  P=0.5d0
+  V=0d0
   do i=1,imax
-    V(0,i)=fv0*exp((S0(i)/N0(i)-P(0,i))/fa)
+    V(0,i)=fv0*exp((S0(i)/N0(i)-P(i))/fa)
     !write(*,*) i,V(0,i)
   end do
   !stop
@@ -215,7 +230,7 @@ program main
            summn(i)=summn(i)+tmp2
           end if
         end do
-        !end if
+
       end do
       !!$omp end parallel do
     end do
@@ -232,13 +247,16 @@ program main
     !if(vel(i,k)) unknown, combine with friction law to solve
   !if(my_rank.eq.0) then
     do i=1,imax
-      dpdt=fb/fdc*(fv0*exp((p0-p(k-1,i))/fb)-V(k-1,i))
-      P(k,i)=P(k-1,i)+dt*dpdt
+      dpdt=fb/fdc*(fv0*exp((p0-P(i))/fb)-V(k-1,i))
+      P(i)=P(i)+dt*dpdt
       !write(*,*) i,P(k,i)
       !p(k,i)=p(k-1,i)+dt*(1-vel(k-1,i)*p(k-1,i)/dc)
-      lnv=rtnewt(dlog(V(k-1,i)/fv0),1d-4,N(i),P(k,i),S0(i),summtg(i))
+      lnv=rtnewt(dlog(V(k-1,i)/fv0),1d-4,N(i),P(i),S0(i),summtg(i))
       V(k,i)=fv0*exp(lnv)
-      if(V(k,i).gt.0.1d0) state(i)=1
+      if(V(k,i).gt.0.1d0 .and. state(i).eq.0) then
+        state(i)=1
+        rupt(i)=t
+      end if
     end do
 
     do i=1,imax
@@ -272,6 +290,8 @@ program main
     close(13)
   end if
   call MPI_BARRIER(MPI_COMM_WORLD,ierr)
+
+  !quasi-dynamic simulation
 
 stop
 
@@ -331,8 +351,6 @@ function inte22(x1,x2,t)
   return
 end function
 
-
-
 real(8) function theta(x)
   implicit none
   real(8):: x
@@ -375,7 +393,6 @@ function rtnewt(prev,eps,nst,p,t0,sum)
   do j=1,jmax
     x=rtnewt
     f=-fv0*exp(x)+cs/cp*(-2*cs/mu*((p+x*fa)*nst-t0)-sum)
-    !df=-1-2*cs**2/cp/mu*a*nst/x
     df=-fv0*exp(x)-2*cs**2/cp/mu*fa*nst
     dx=f/df
     rtnewt=rtnewt-dx
