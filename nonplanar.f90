@@ -1,39 +1,56 @@
 program main
   !$ use omp_lib
   implicit none
-  !2D in-plane full-dynamic BIEM with slip weakening friction law.
-  !based on Ando et al., 2007.
-  !developed by SO OZAWA, master student at UTokyo
+  !2D in-plane full-dynamic BIEM with rate and state friction law.
+  !developed by SO OZAWA, PhD student at Univ. Tokyo
   include 'mpif.h'
-  real(8),allocatable::kernt(:,:,:),kernn(:,:,:),vel(:,:),disp(:),summt(:),summn(:),tau(:),stress(:),normal(:),sigma(:),rupt(:)
+
+  !elastodynamic convolution kernel for shear and normal stress respectively.
+  integer::imax,kmax
+  real(8)::dt,dx
+  real(8),allocatable::kernt(:,:,:),kernn(:,:,:)
+
+  !physical variables
+  real(8),allocatable::V(:,:),P(:),D(:),S0(:),S(:),N0(:),N(:),rupt(:)
+  integer,allocatable::state(:)
+
+  !physical constants
+  real(8),parameter::cs=1.d0,pi=4.d0*atan(1.d0),cp=cs*sqrt(3d0),mu=1.d0
+  real(8)::ffp,ffr,fdc
+  real(8)::sxx0,syy0,sxy0
+
+  !for fault geometry and nucleation location
   real(8),allocatable::xcol(:),ycol(:),xel(:),xer(:),yel(:),yer(:),nx(:),ny(:),xr(:),yr(:),ds(:)
-  real(8),allocatable::xcol_(:),ycol_(:),nx_(:),ny_(:),summtg(:),summng(:)
-  integer,allocatable::state(:),rcounts(:),displs(:) !0:locked 1:slipping
-  integer,allocatable::nm(:,:),nc(:) !1 right 2:left
-  real(8)::dt,dx,t,tp,tr,mu,dc,tau0,et,x,y,r,sin2,cos2,kern11,kern12,kern22,up,ur,ang
   real(8),allocatable::xtl(:),xtr(:),ytl(:),ytr(:)
-  real(8)::hypox,hypoy,time1,time2,time3,time4,tmp1,tmp2,factor,rad
-  real(8),parameter::cs=1.d0,pi=4.d0*atan(1.d0),cp=cs*sqrt(3d0)
-  integer::i,j,k,n,imax,kmax,p,q,filesize,rn,nf
+  integer,allocatable::nm(:,:),nc(:)
+  real(8),allocatable::xcol_(:),ycol_(:),nx_(:),ny_(:)
+  real(8)::hypox,hypoy !hypocenter
+
+  !for MPI communication and performance evaluation
+  integer,allocatable::rcounts(:),displs(:)
   integer::ierr,imax_,icomm,np,amari,my_rank,stat
+  real(8)::time1,time2,time3,time4
+
+  !others (i.e. temporal memory, variables for loops...)
+  real(8),allocatable::summt(:),summn(:),summtg(:),summng(:)
+  real(8)::tmp1,tmp2,t,tp,tr,tau0,et,x,y,r,sin2,cos2,kern11,kern12,kern22,up,ur,ang
+  real(8)::factor,rad,dpdt,lnv
+  integer::i,j,k,m,filesize,rn,nf,q
   character(128)::filename,command
 
   dx=0.05d0
   dt=dx*0.5d0
-  mu=1.d0
-  dc=0.05d0
+  fdc=0.05d0
   et=0.8d0
 
-  tau0=0.4d0
-  up=0.6d0
-  ur=0.2d0
+  ffp=0.7d0
+  ffr=0.2d0
 
-  !geometry
-  !orthogonal
-  !xtl(1)=0d0;ytl(1)=0d0;xtr(1)=3d0;ytr(1)=0d0;nc(1)=floor(sqrt((xtl(1)-xtr(1))**2+(ytl(1)-ytr(1))**2)/dx)
-  !xtl(2)=2d0;ytl(2)=-2d0;xtr(2)=2d0;ytr(2)=0.5d0;nc(2)=floor(sqrt((xtl(2)-xtr(2))**2+(ytl(2)-ytr(2))**2)/dx)
+  sxx0=1.d0
+  sxy0=0.4d0
+  syy0=1.d0
 
-!step-oveir
+  !fault geometry by input file
   call get_command_argument(1,filename,status=stat)
   open(30,file=filename)
   read(30,*) nf
@@ -42,11 +59,6 @@ program main
   read(30,*) xtl(i),ytl(i),xtr(i),ytr(i)
   end do
   read(30,*) hypox,hypoy
-  !xtl(1)=0d0;ytl(1)=0d0;xtr(1)=7d0;ytr(1)=0d0
-  !xtl(2)=3d0;ytl(2)=-0.3d0;xtr(2)=14d0;ytr(2)=-0.3d0
-  !xtl(3)=10d0;ytl(3)=0d0;xtr(3)=16d0;ytr(3)=0d0
-  !hypox=2.0d0;hypoy=0d0
-  !write(*,*) sum(xtl(2:1))
 !stop
   do i=1,nf
     nc(i)=floor(sqrt((xtl(i)-xtr(i))**2+(ytl(i)-ytr(i))**2)/dx)
@@ -54,7 +66,7 @@ program main
 
 
   imax=sum(nc)
-  kmax=imax*3+1
+  kmax=imax*4+1
   !write(command,"('sed -i -e 's/nstep/',i0,'/g' gnu.gp')") kmax
   !call system(command)
   if(my_rank.eq.0) write(*,*) 'n,kmax',imax,kmax
@@ -79,8 +91,8 @@ program main
   imax_=rcounts(my_rank+1)
   write(*,*) imax_
 
-  allocate(kernt(0:kmax,imax,imax_),kernn(0:kmax,imax,imax_),vel(0:kmax,imax),disp(imax),summt(imax_),summn(imax_),tau(imax),normal(imax),summtg(imax),summng(imax),rupt(imax))
-  allocate(xcol(imax),ycol(imax),nx(imax),ny(imax),state(imax),stress(imax),sigma(imax))
+  allocate(kernt(0:kmax,imax,imax_),kernn(0:kmax,imax,imax_),V(0:kmax,imax),D(imax),summt(imax_),summn(imax_),S0(imax),N0(imax),summtg(imax),summng(imax),rupt(imax))
+  allocate(xcol(imax),ycol(imax),nx(imax),ny(imax),state(imax),S(imax),N(imax))
   allocate(xcol_(imax_),ycol_(imax_),nx_(imax_),ny_(imax_),nm(imax,imax_))
   allocate(xr(imax+1),yr(imax+1),ds(imax),xel(imax),xer(imax),yel(imax),yer(imax))
 
@@ -143,11 +155,7 @@ program main
     end do
     !write(25,*)
   end do
-  kernn=-kernn
-  !write(*,*)minval(kernt),minval(kernn)
 
-  i=50
-  j=150
   !k=kmax
   ! if(my_rank.eq.0) then
   !   open(25,file='kern.dat')
@@ -162,7 +170,6 @@ program main
   ! stop
 
 
-  call initialcrack(hypox,hypoy,xcol,ycol,disp,tau,state,imax,dx,up,ur,tau0)
   !do i=1,imax
   !  write(*,*) disp(i),tau(i),state(i)
   !end do
@@ -175,14 +182,27 @@ program main
   !   vel(i,0)=0.d0
   ! end do
   !stop
-
   !time evolution
   time2= MPI_Wtime()
   if(my_rank.eq.0) write(*,*) time2-time1
-  sigma=1d0
+
+  !initial stress as a function of angle
+  do i=1,imax
+    ang=-dasin(nx(i))
+    S0(i)=sxy0*cos(2*ang)+0.5d0*(sxx0-syy0)*sin(2*ang)
+    N0(i)=sin(ang)**2*sxx0+cos(ang)**2*syy0+sxy0*sin(2*ang)
+  end do
+
+  !nucleation
+  call initialcrack(hypox,hypoy,xcol,ycol,S0,imax,dx)
   t=0d0
-  vel=0d0
+  V=0d0
+  t=0d0
+  D=0d0
   rupt=0d0
+  time2= MPI_Wtime()
+  if(my_rank.eq.0) write(*,*) time2-time1
+
   do k=1,kmax
     call MPI_BARRIER(MPI_COMM_WORLD,ierr)
     time3= MPI_Wtime()
@@ -192,12 +212,12 @@ program main
       !!$omp parallel do
       do j=1,imax
         !if(nm(i,j).lt.k) then
-        p=nm(j,i)
+        q=nm(j,i)
         !p=1
-        do n=1,k-p!k-1
-          if(vel(n,j).ne.0d0) then
-           tmp1=vel(n,j)*kernt(k-n,j,i)
-           tmp2=vel(n,j)*kernn(k-n,j,i)
+        do m=1,k-q!k-1
+          if(V(m,j).ne.0d0) then
+           tmp1=V(m,j)*kernt(k-m,j,i)
+           tmp2=V(m,j)*kernn(k-m,j,i)
            summt(i)=summt(i)+tmp1
            summn(i)=summn(i)+tmp2
           end if
@@ -213,53 +233,55 @@ program main
     call MPI_ALLGATHERv(summt,imax_,MPI_REAL8,summtg,rcounts,displs,  MPI_REAL8,MPI_COMM_WORLD,ierr)
 
     do i=1,imax
-      normal(i)=sigma(i)+summng(i)
+      N(i)=N0(i)+summng(i)
+      if(N(i).lt.0.1d0) N(i)=0.1d0
+      if(N(i).gt.1.9d0) N(i)=1.9d0
     end do
     !if(vel(i,k)) known, calculate stress directly
     !if(vel(i,k)) unknown, combine with friction law to solve
     do i=1,imax
-      tp=up*max(0d0,normal(i))
-      tr=ur*max(0d0,normal(i))
+      tp=ffp*N(i)
+      tr=ffr*N(i)
       rad=2*cs**2/cp/mu
-      factor=rad*0.5d0*dt*(tp-tr)/dc
+      factor=rad*0.5d0*dt*(tp-tr)/fdc
       if(state(i).eq.1) then
         !write(*,*) k,max(0.d0,th*(1.d0-disp(i)/dc)),tau(i)
-        if(disp(i).le.dc) then
-          vel(k,i)=1/(1+factor)*cs/cp*(-2.d0*cs/mu*(tr+(tp-tr)*(1.d0-(disp(i)+0.5d0*dt*vel(k-1,i))/dc)-tau(i))-summtg(i))
-          vel(k,i)=0.5d0*(vel(k-1,i)+vel(k,i))
+        if(D(i).le.fdc) then
+          V(k,i)=1/(1+factor)*cs/cp*(-2.d0*cs/mu*(tr+(tp-tr)*(1.d0-(D(i)+0.5d0*dt*V(k-1,i))/fdc)-S0(i))-summtg(i))
+          V(k,i)=0.5d0*(V(k-1,i)+V(k,i))
         else
-          vel(k,i)=cs/cp*(-2d0*cs/mu*(tr-tau(i))-summtg(i))
+          V(k,i)=cs/cp*(-2d0*cs/mu*(tr-S0(i))-summtg(i))
         end if
-    else if(tau(i)-mu/2.d0/cs*summtg(i).gt.tp) then
+    else if(S0(i)-mu/2.d0/cs*summtg(i).gt.tp) then
       state(i)=1
       rupt(i)=k*dt
-      vel(k,i)=cs/cp*(-2.d0*cs/mu*(max(tr,tr+(tp-tr)*(1.d0-disp(i)/dc))-tau(i))-summtg(i))
+      V(k,i)=cs/cp*(-2.d0*cs/mu*(max(tr,tr+(tp-tr)*(1.d0-D(i)/fdc))-S0(i))-summtg(i))
     else
-      vel(k,i)=0.d0
+      V(k,i)=0.d0
     end if
-    if(vel(k,i).lt.0.d0) vel(k,i)=0.d0
+    if(V(k,i).lt.0.d0) V(k,i)=0.d0
     end do
 
     do i=1,imax
-      disp(i)=disp(i)+dt*vel(k,i)
-      stress(i)=tau(i)-mu/2.d0/cs*(summtg(i)+cp/cs*vel(k,i))
+      D(i)=D(i)+dt*V(k,i)
+      S(i)=S0(i)-mu/2.d0/cs*(summtg(i)+cp/cs*V(k,i))
     end do
     !writing output
       !output
       if(my_rank.eq.0) then
     do i=1,imax
-      write(12,'(2i6,7e15.6,i6)') i,k,xcol(i),ycol(i),vel(k,i),stress(i),disp(i),normal(i),stress(i)/normal(i),state(i)
+      write(12,'(2i6,7e15.6,i6)') i,k,xcol(i),ycol(i),V(k,i),S(i),D(i),N(i),S(i)/N(i),state(i)
     end do
     write(12,*)
   end if
     !write(12,*)
     t=t+dt
     time2= MPI_Wtime()
-    if(mod(k,10).eq.0 .and. my_rank.eq.0) write(*,*) 'time step=',k,time2-time1,maxval(vel(k,:))
-    ! if(maxval(vel(k,:)).le.0.00001d0) then
-    !   write(*,*) k,'slip rate zero'
-    !   exit
-    ! end if
+    if(mod(k,10).eq.0 .and. my_rank.eq.0) write(*,*) 'time step=',k,time2-time1,maxval(V(k,:))
+    if(maxval(V(k,:)).le.1d-5) then
+      write(*,*) k,'slip rate zero'
+      exit
+    end if
   end do
   if(my_rank.eq.0) then
     open(13,file='rupt.dat')
@@ -338,55 +360,79 @@ real(8) function theta(x)
   return
 end function
 
-subroutine initialcrack(hypox,hypoy,xcol,ycol,disp,tau,state,imax,dx,up,ur,tau0)
+subroutine initialcrack(hypox,hypoy,xcol,ycol,S0,imax,dx)
   implicit none
   integer,intent(in)::imax
-  real(8),intent(in)::up,ur,tau0,dx,xcol(:),ycol(:),hypox,hypoy
-  real(8),intent(out)::disp(:),tau(:)
-  integer,intent(out)::state(:)
-  real(8)::lc,kerns(imax,imax),rr
+  real(8),intent(in)::dx,xcol(:),ycol(:),hypox,hypoy
+  real(8),intent(out)::S0(:)
+  real(8)::lc,kerns(imax,imax),rr,amp
   real(8),parameter::pi=4.d0*atan(1.d0)
 
-  lc=dc*4.d0/pi*(up-ur)/(tau0-ur)**2*0.5d0
-
- disp=0.d0
-   state=0
-   !hypo=0.5d0
-  do i=1,imax
-    rr=(xcol(i)-hypox)**2+(ycol(i)-hypoy)**2
-    if(rr.lt.lc**2) then
-      state(i)=1
-      disp(i)=0.67d0*dsqrt(lc**2-rr)
-   end if
-  end do
-  do i=1,imax
-    do j=1,imax
-      kerns(i,j)=2d0*mu/3.d0/pi*(1.d0/(dx*(i-j-0.5d0))-1.d0/(dx*(i-j+0.5d0)))
-    end do
-    tau(i)=tau0+sum(disp(:)*kerns(i,:))
-  end do
-
+  !lc=fdc*4.d0/pi*(up-ur)/(tau0-ur)**2*0.5d0
+  lc=1.d0
   !gaussian
-   state=0
-   disp=0d0
-   tau=tau0
+   S0=0.5d0
+   amp=0.3d0
    do i=1,imax
      !xcol=dx*(i-imax/2-0.5d0)
      rr=(xcol(i)-hypox)**2+(ycol(i)-hypoy)**2
      if(rr.lt.lc**2) then
-       tau(i)=up*1.05d0
-       state(i)=1
+       S0(i)=S0(i)+amp*exp(-rr/lc**2)
      end if
    end do
 
- !  do i=1,imax
- !    xcol=dx*(i-imax/2-0.5d0)
- !      if(xcol**2.lt.lc**2) then
- !       state(i)=1
- !       tau(i)=1.01d0
- !     end if
- ! end do
-
   return
 end subroutine
+
+! subroutine initialcrack(hypox,hypoy,xcol,ycol,disp,tau,state,imax,dx,up,ur,tau0)
+!   implicit none
+!   integer,intent(in)::imax
+!   real(8),intent(in)::up,ur,tau0,dx,xcol(:),ycol(:),hypox,hypoy
+!   real(8),intent(out)::disp(:),tau(:)
+!   integer,intent(out)::state(:)
+!   real(8)::lc,kerns(imax,imax),rr
+!   real(8),parameter::pi=4.d0*atan(1.d0)
+!
+!   lc=dc*4.d0/pi*(up-ur)/(tau0-ur)**2*0.5d0
+!
+!  disp=0.d0
+!    state=0
+!    !hypo=0.5d0
+!   do i=1,imax
+!     rr=(xcol(i)-hypox)**2+(ycol(i)-hypoy)**2
+!     if(rr.lt.lc**2) then
+!       state(i)=1
+!       disp(i)=0.67d0*dsqrt(lc**2-rr)
+!    end if
+!   end do
+!   do i=1,imax
+!     do j=1,imax
+!       kerns(i,j)=2d0*mu/3.d0/pi*(1.d0/(dx*(i-j-0.5d0))-1.d0/(dx*(i-j+0.5d0)))
+!     end do
+!     tau(i)=tau0+sum(disp(:)*kerns(i,:))
+!   end do
+!
+!   !gaussian
+!    state=0
+!    disp=0d0
+!    tau=tau0
+!    do i=1,imax
+!      !xcol=dx*(i-imax/2-0.5d0)
+!      rr=(xcol(i)-hypox)**2+(ycol(i)-hypoy)**2
+!      if(rr.lt.lc**2) then
+!        tau(i)=up*1.05d0
+!        state(i)=1
+!      end if
+!    end do
+!
+!  !  do i=1,imax
+!  !    xcol=dx*(i-imax/2-0.5d0)
+!  !      if(xcol**2.lt.lc**2) then
+!  !       state(i)=1
+!  !       tau(i)=1.01d0
+!  !     end if
+!  ! end do
+!
+!   return
+! end subroutine
 end program
