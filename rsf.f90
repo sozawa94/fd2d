@@ -17,6 +17,7 @@ program main
   !physical constants
   real(8),parameter::cs=1.d0,pi=4.d0*atan(1.d0),cp=cs*sqrt(3d0),mu=1.d0
   real(8)::ff0,fv0,fp0,fdc,fa,fb,p0
+  real(8)::sxx0,syy0,sxy0
 
   !for fault geometry and nucleation location
   real(8),allocatable::xcol(:),ycol(:),xel(:),xer(:),yel(:),yer(:),nx(:),ny(:),xr(:),yr(:),ds(:)
@@ -42,9 +43,9 @@ program main
   fdc=0.005d0
   et=0.8d0
 
-  S0=0.4d0
-  N0=1.d0
-  P0=0.5d0
+  sxx0=1.d0
+  sxy0=0.4d0
+  syy0=1.d0
   fv0=1d-9
   fp0=fdc/fv0
   fa=0.016d0
@@ -156,7 +157,7 @@ program main
         kern22=inte22(x+0.5d0*ds(j),y,(k+et)*dt)-inte22(x-0.5d0*ds(j),y,(k+et)*dt)-inte22(x+0.5d0*ds(j),y,(k-1+et)*dt)+inte22(x-0.5d0*ds(j),y,(k-1+et)*dt)
 
         kernt(k,j,i)=0.5d0*(kern11-kern22)*sin2+kern12*cos2
-        kernn(k,j,i)=-(0.5d0*(kern11+kern22)-0.5d0*(kern11-kern22)*cos2-kern12*sin2)
+        kernn(k,j,i)=0.5d0*(kern11+kern22)-0.5d0*(kern11-kern22)*cos2-kern12*sin2
         !if(abs(kernn(i,j,k)).le.1d-8) kernn(k,j,i)=0d0
         !write(25,'(3i6,4e15.6)') i,j,k,kernt(i,j,k),kernn(i,j,k)
       end do
@@ -167,8 +168,6 @@ program main
   !kernn=-kernn
   !write(*,*)minval(kernt),minval(kernn)
 
-  i=50
-  j=150
   !k=kmax
   ! if(my_rank.eq.0) then
   !   open(25,file='kern.dat')
@@ -199,9 +198,17 @@ program main
   !time evolution
   time2= MPI_Wtime()
   if(my_rank.eq.0) write(*,*) time2-time1
+
+  !initial stress as a function of angle
+  do i=1,imax
+    ang=-dasin(nx(i))
+    S0(i)=sxy0*cos(2*ang)+0.5d0*(sxx0-syy0)*sin(2*ang)
+    N0(i)=sin(ang)**2*sxx0+cos(ang)**2*syy0+sxy0*sin(2*ang)
+  end do
+
+  !nucleation
   call initialcrack(hypox,hypoy,xcol,ycol,S0,imax,dx)
   t=0d0
-  N0=1d0
   P=0.5d0
   V=0d0
   do i=1,imax
@@ -211,6 +218,7 @@ program main
   !stop
   D=0d0
   rupt=0d0
+
   do k=1,kmax
     call MPI_BARRIER(MPI_COMM_WORLD,ierr)
     time3= MPI_Wtime()
@@ -242,6 +250,8 @@ program main
 
     do i=1,imax
       N(i)=N0(i)+summng(i)
+      if(N(i).lt.0.1d0) N(i)=0.1d0
+      if(N(i).gt.1.9d0) N(i)=1.9d0
     end do
     !if(vel(i,k)) known, calculate stress directly
     !if(vel(i,k)) unknown, combine with friction law to solve
