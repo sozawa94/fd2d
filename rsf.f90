@@ -271,7 +271,7 @@ program main
 
     do i=1,imax
       D(i)=D(i)+dt*V(k,i)
-      S(i)=S0(i)-mu/2.d0/cs*(summtg(i)+cp/cs*V(k,i))
+      S(i)=S0(i)-mu/2.d0/cs*(summtg(i)+V(k,i))
     end do
     !writing output
       !output
@@ -402,8 +402,8 @@ function rtnewt(prev,eps,nst,p,t0,sum)
   !write(*,*) rtnewt
   do j=1,jmax
     x=rtnewt
-    f=-fv0*exp(x)+cs/cp*(-2*cs/mu*((p+x*fa)*nst-t0)-sum)
-    df=-fv0*exp(x)-2*cs**2/cp/mu*fa*nst
+    f=-fv0*exp(x)+1.d0*(-2*cs/mu*((p+x*fa)*nst-t0)-sum)
+    df=-fv0*exp(x)-2*cs/mu*fa*nst
     dx=f/df
     rtnewt=rtnewt-dx
     !write(*,*) rtnewt
