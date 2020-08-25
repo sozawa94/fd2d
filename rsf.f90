@@ -15,7 +15,7 @@ program main
   integer,allocatable::state(:)
 
   !physical constants
-  real(8),parameter::cs=1.d0,pi=4.d0*atan(1.d0),cp=cs*sqrt(3d0),mu=1.d0
+  real(8),parameter::cs=3.464d0,pi=4.d0*atan(1.d0),cp=cs*sqrt(3d0),mu=40.d0
   real(8)::ff0,fv0,fp0,fdc,fa,fb,p0
   real(8)::sxx0,syy0,sxy0
 
@@ -38,18 +38,19 @@ program main
   integer::i,j,k,m,filesize,rn,nf,q
   character(128)::filename,command
 
-  dx=0.05d0
-  dt=dx*0.5d0
-  fdc=0.005d0
-  et=0.8d0
+  dx=0.01d0
+  dt=dx*0.5d0/cs
+  fdc=0.01d0
+  et=0.5d0
 
-  sxx0=1.d0
-  sxy0=0.4d0
-  syy0=1.d0
+  sxx0=100d0
+  sxy0=58d0
+  syy0=100.d0
   fv0=1d-9
+  ff0=0.6d0
   fp0=fdc/fv0
-  fa=0.016d0
-  fb=0.020d0
+  fa=0.012d0
+  fb=0.015d0
 
   !geometry
   !orthogonal
@@ -77,7 +78,7 @@ program main
 
   !determine the number of elements and time step
   imax=sum(nc)
-  kmax=imax*3+1
+  kmax=imax*2+1
   if(my_rank.eq.0) write(*,*) 'n,kmax',imax,kmax
 
   !MPI routine
@@ -250,14 +251,14 @@ program main
 
     do i=1,imax
       N(i)=N0(i)+summng(i)
-      if(N(i).lt.0.1d0) N(i)=0.1d0
-      if(N(i).gt.1.9d0) N(i)=1.9d0
+      if(N(i).lt.10d0) N(i)=10d0
+      if(N(i).gt.190d0) N(i)=190d0
     end do
     !if(vel(i,k)) known, calculate stress directly
     !if(vel(i,k)) unknown, combine with friction law to solve
   !if(my_rank.eq.0) then
     do i=1,imax
-      dpdt=fb/fdc*(fv0*exp((p0-P(i))/fb)-V(k-1,i))
+      dpdt=fb/fdc*(fv0*exp((ff0-P(i))/fb)-V(k-1,i))
       P(i)=P(i)+dt*dpdt
       !write(*,*) i,P(k,i)
       !p(k,i)=p(k-1,i)+dt*(1-vel(k-1,i)*p(k-1,i)/dc)
@@ -275,9 +276,9 @@ program main
     end do
     !writing output
       !output
-      if(my_rank.eq.0) then
+      if(mod(k,100).eq.0.and.my_rank.eq.0) then
     do i=1,imax
-      write(12,'(2i6,7e15.6,i6)') i,k,xcol(i),ycol(i),V(k,i),S(i),D(i),N(i),S(i)/N(i),state(i)
+      write(12,'(8e15.6)') k*dt,xcol(i),V(k,i),S(i),D(i),N(i),S(i)/N(i),P(i)
     end do
     write(12,*)
   end if
@@ -309,7 +310,7 @@ contains
   function inte11(x1,x2,t)
     implicit none
     real(8)::x1,x2,t,ss,sp,inte11,pa,r
-    real(8),parameter::pi=4.d0*atan(1.d0),cs=1.d0,cp=sqrt(3.d0)*cs
+    !real(8),parameter::pi=4.d0*atan(1.d0),cs=1.d0,cp=sqrt(3.d0)*cs
     r=sqrt(x1**2+x2**2)
     ss=cs*t/r
     sp=cp*t/r
@@ -327,7 +328,7 @@ contains
 function inte12(x1,x2,t)
   implicit none
   real(8)::x1,x2,t,ss,sp,inte12,pa,r
-  real(8),parameter::pi=4.d0*atan(1.d0),cs=1.d0,cp=sqrt(3.d0)*cs
+  !real(8),parameter::pi=4.d0*atan(1.d0),cs=1.d0,cp=sqrt(3.d0)*cs
   r=sqrt(x1**2+x2**2)
   ss=cs*t/r
   sp=cp*t/r
@@ -346,7 +347,7 @@ end function
 function inte22(x1,x2,t)
   implicit none
   real(8)::x1,x2,t,ss,sp,inte22,pa,r
-  real(8),parameter::pi=4.d0*atan(1.d0),cs=1.d0,cp=sqrt(3.d0)*cs
+  !real(8),parameter::pi=4.d0*atan(1.d0),cs=1.d0,cp=sqrt(3.d0)*cs
   r=sqrt(x1**2+x2**2)
   ss=cs*t/r
   sp=cp*t/r
@@ -378,16 +379,16 @@ subroutine initialcrack(hypox,hypoy,xcol,ycol,S0,imax,dx)
   real(8),parameter::pi=4.d0*atan(1.d0)
 
   !lc=fdc*4.d0/pi*(up-ur)/(tau0-ur)**2*0.5d0
-  lc=1.d0
+  lc=1d0
   !gaussian
-   S0=0.5d0
-   amp=0.3d0
+   !S0=40d0
+   amp=15d0
    do i=1,imax
      !xcol=dx*(i-imax/2-0.5d0)
      rr=(xcol(i)-hypox)**2+(ycol(i)-hypoy)**2
-     if(rr.lt.lc**2) then
+     !if(rr.lt.4*lc**2) then
        S0(i)=S0(i)+amp*exp(-rr/lc**2)
-     end if
+     !end if
    end do
 
   return
@@ -402,7 +403,7 @@ function rtnewt(prev,eps,nst,p,t0,sum)
   !write(*,*) rtnewt
   do j=1,jmax
     x=rtnewt
-    f=-fv0*exp(x)+1.d0*(-2*cs/mu*((p+x*fa)*nst-t0)-sum)
+    f=-fv0*exp(x)-2*cs/mu*((p+x*fa)*nst-t0)-sum
     df=-fv0*exp(x)-2*cs/mu*fa*nst
     dx=f/df
     rtnewt=rtnewt-dx
