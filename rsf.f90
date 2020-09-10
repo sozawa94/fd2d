@@ -11,7 +11,7 @@ program main
   real(8),allocatable::kernt(:,:,:),kernn(:,:,:)
 
   !physical variables
-  real(8),allocatable::V(:,:),P(:),D(:),S0(:),S(:),N0(:),N(:),rupt(:)
+  real(8),allocatable::V(:,:),P(:),D(:),S0(:),S(:),N0(:),N(:),rupt(:),DD(:,:)
   integer,allocatable::state(:)
 
   !physical constants
@@ -79,6 +79,7 @@ program main
   !determine the number of elements and time step
   imax=sum(nc)
   kmax=imax*2+1
+  kmax=1000
   if(my_rank.eq.0) write(*,*) 'n,kmax',imax,kmax
 
   !MPI routine
@@ -105,7 +106,7 @@ program main
   allocate(xcol(imax),ycol(imax),nx(imax),ny(imax),state(imax),S(imax),N(imax))
   allocate(xcol_(imax_),ycol_(imax_),nx_(imax_),ny_(imax_),nm(imax,imax_))
   allocate(xr(imax+1),yr(imax+1),ds(imax),xel(imax),xer(imax),yel(imax),yer(imax))
-
+  allocate(DD(0:kmax,imax))
   !mesh generation
   do k=1,nf
     do i=0,nc(k)
@@ -128,9 +129,9 @@ program main
     ang=atan((yer(i)-yel(i))/(xer(i)-xel(i)))
     nx(i)=-sin(ang)
     ny(i)=cos(ang)
-    !write(*,'(9e15.6)') xcol(i),ycol(i),xel(i),xer(i),yel(i),yer(i),nx(i),ny(i),ds(i)
+    write(*,'(9e15.6)') xcol(i),ycol(i),xel(i),xer(i),yel(i),yer(i),nx(i),ny(i),ds(i)
    end do
-   !stop
+   stop
 
    call MPI_SCATTERv(xcol,rcounts,displs,MPI_REAL8,xcol_,imax_,MPI_REAL8,0,MPI_COMM_WORLD,ierr)
    call MPI_SCATTERv(ycol,rcounts,displs,MPI_REAL8,ycol_,imax_,MPI_REAL8,0,MPI_COMM_WORLD,ierr)
@@ -196,6 +197,14 @@ program main
   ! end do
   !stop
 
+  ! DD=0
+  ! do k=0,kmax
+  !   t=k*dt
+  !   do i=1,imax
+  !     if(abs(xcol(i)-5.12d0).lt.0.8*cs*t) DD(k,i)=t*sqrt(1d0-(xcol(i)-5.12d0)**2/(0.8*cs*t)**2)
+  !   end do
+  ! end do
+
   !time evolution
   time2= MPI_Wtime()
   if(my_rank.eq.0) write(*,*) time2-time1
@@ -211,7 +220,7 @@ program main
   call initialcrack(hypox,hypoy,xcol,ycol,S0,imax,dx)
   t=0d0
   P=0.5d0
-  V=0d0
+  D=0d0
   do i=1,imax
     V(0,i)=fv0*exp((S0(i)/N0(i)-P(i))/fa)
     !write(*,*) i,V(0,i)
@@ -219,6 +228,10 @@ program main
   !stop
   D=0d0
   rupt=0d0
+  do i=1,imax
+      write(12,'(8e15.6)') 0d0,xcol(i),V(k,i),S0(i),D(i),N0(i),S0(i)/N0(i),P(i)
+  end do
+  write(12,*)
 
   do k=1,kmax
     call MPI_BARRIER(MPI_COMM_WORLD,ierr)
@@ -255,14 +268,18 @@ program main
       if(N(i).gt.190d0) N(i)=190d0
     end do
     !if(vel(i,k)) known, calculate stress directly
+    ! do i=1,imax
+    !   !if(abs(xcol(i)-5.12d0).lt.0.8*cs*t) V(k,i)=0.1d0*(sqrt(1d0-(xcol(i)-5.12d0)**2/(0.8*cs*t)**2)+(xcol(i)-5.12d0)**2/(0.8*cs*t)**2/sqrt(1d0-(xcol(i)-5.12d0)**2/(0.8*cs*t)**2))
+    !   V(k,i)=DD(k,i)-DD(k-1,i)
+    ! end do
+
     !if(vel(i,k)) unknown, combine with friction law to solve
-  !if(my_rank.eq.0) then
     do i=1,imax
       dpdt=fb/fdc*(fv0*exp((ff0-P(i))/fb)-V(k-1,i))
       P(i)=P(i)+dt*dpdt
       !write(*,*) i,P(k,i)
       !p(k,i)=p(k-1,i)+dt*(1-vel(k-1,i)*p(k-1,i)/dc)
-      lnv=rtnewt(dlog(V(k-1,i)/fv0),1d-4,N(i),P(i),S0(i),summtg(i))
+      lnv=rtnewt(dlog(V(k-1,i)/fv0),1d-5,N(i),P(i),S0(i),summtg(i))
       V(k,i)=fv0*exp(lnv)
       if(V(k,i).gt.0.1d0 .and. state(i).eq.0) then
         state(i)=1
@@ -270,13 +287,15 @@ program main
       end if
     end do
 
+
+
     do i=1,imax
       D(i)=D(i)+dt*V(k,i)
       S(i)=S0(i)-mu/2.d0/cs*(summtg(i)+V(k,i))
     end do
     !writing output
       !output
-      if(mod(k,100).eq.0.and.my_rank.eq.0) then
+      if(mod(k,10).eq.0.and.my_rank.eq.0) then
     do i=1,imax
       write(12,'(8e15.6)') k*dt,xcol(i),V(k,i),S(i),D(i),N(i),S(i)/N(i),P(i)
     end do
@@ -294,7 +313,7 @@ program main
     !end if
   end do
   if(my_rank.eq.0) then
-    open(13,file='rupt.dat')
+    open(13,file='rupt2.dat')
     do i=1,imax
       write(13,*) xcol(i),ycol(i),rupt(i)
     end do
@@ -336,7 +355,8 @@ function inte12(x1,x2,t)
   inte12=0d0
   inte12=1d0/pa*theta(x1)*theta(t-abs(x2)/cs)
   if(t-abs(r)/cp.ge.0.d0) then
-    inte12=inte12-sign(1.d0,x1)/pi*2*abs(x1)/r*pa*(2*(3*x2**2-x1**2)/(3*r**2)*pa**2*sqrt(sp**2-1d0)**3+2*x2**2/r*pa**2*sqrt(sp**2-1d0))
+    !inte12=inte12-sign(1.d0,x1)/pi*2*abs(x1)/r*pa*(2*(3*x2**2-x1**2)/(3*r**2)*pa**2*sqrt(sp**2-1d0)**3+2*x2**2/r*pa**2*sqrt(sp**2-1d0))
+    inte12=inte12-sign(1.d0,x1)/pi*2*abs(x1)/r*pa*(2*(3*x2**2-x1**2)/(3*r**2)*pa**2*sqrt(sp**2-1d0)**3+2*x2**2/r**2*pa**2*sqrt(sp**2-1d0))
   end if
   if(t-abs(r)/cs.ge.0.d0) then
     inte12=inte12+sign(1.d0,x1)/pi*(2*abs(x1)/r*(2*(3*x2**2-x1**2)/(3*r**2)*sqrt(ss**2-1d0)**3+2*x2**2/r**2*sqrt(ss**2-1d0))-acos(abs(x1)/sqrt(cs**2*t**2-x2**2)))
