@@ -129,9 +129,9 @@ program main
     ang=atan((yer(i)-yel(i))/(xer(i)-xel(i)))
     nx(i)=-sin(ang)
     ny(i)=cos(ang)
-    write(*,'(9e15.6)') xcol(i),ycol(i),xel(i),xer(i),yel(i),yer(i),nx(i),ny(i),ds(i)
+    !write(*,'(9e15.6)') xcol(i),ycol(i),xel(i),xer(i),yel(i),yer(i),nx(i),ny(i),ds(i)
    end do
-   stop
+   !stop
 
    call MPI_SCATTERv(xcol,rcounts,displs,MPI_REAL8,xcol_,imax_,MPI_REAL8,0,MPI_COMM_WORLD,ierr)
    call MPI_SCATTERv(ycol,rcounts,displs,MPI_REAL8,ycol_,imax_,MPI_REAL8,0,MPI_COMM_WORLD,ierr)
@@ -353,7 +353,7 @@ function inte12(x1,x2,t)
   sp=cp*t/r
   pa=cs/cp
   inte12=0d0
-  inte12=1d0/pa*theta(x1)*theta(t-abs(x2)/cs)
+  inte12=theta(x1)*theta(t-abs(x2)/cs)
   if(t-abs(r)/cp.ge.0.d0) then
     !inte12=inte12-sign(1.d0,x1)/pi*2*abs(x1)/r*pa*(2*(3*x2**2-x1**2)/(3*r**2)*pa**2*sqrt(sp**2-1d0)**3+2*x2**2/r*pa**2*sqrt(sp**2-1d0))
     inte12=inte12-sign(1.d0,x1)/pi*2*abs(x1)/r*pa*(2*(3*x2**2-x1**2)/(3*r**2)*pa**2*sqrt(sp**2-1d0)**3+2*x2**2/r**2*pa**2*sqrt(sp**2-1d0))
