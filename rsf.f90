@@ -34,14 +34,14 @@ program main
   !others (i.e. temporal memory, variables for loops...)
   real(8),allocatable::summt(:),summn(:),summtg(:),summng(:)
   real(8)::tmp1,tmp2,t,tp,tr,tau0,et,x,y,r,sin2,cos2,kern11,kern12,kern22,up,ur,ang
-  real(8)::factor,rad,dpdt,lnv
+  real(8)::factor,rad,dpdt,lnv,past,ptmp,lnvtmp
   integer::i,j,k,m,filesize,rn,nf,q
   character(128)::filename,command
 
   dx=0.01d0
   dt=dx*0.5d0/cs
   fdc=0.01d0
-  et=0.5d0
+  et=0.43d0
 
   sxx0=100d0
   sxy0=58d0
@@ -78,8 +78,8 @@ program main
 
   !determine the number of elements and time step
   imax=sum(nc)
-  kmax=imax*2+1
-  kmax=1000
+  kmax=2700
+  !kmax=1000
   if(my_rank.eq.0) write(*,*) 'n,kmax',imax,kmax
 
   !MPI routine
@@ -122,6 +122,12 @@ program main
     end do
   end do
 
+  !gaussian bump
+  do i=1,imax
+    yel(i)=bump(xel(i))
+    yer(i)=bump(xer(i))
+  end do
+
   do i=1,imax
     xcol(i)=0.5d0*(xel(i)+xer(i))
     ycol(i)=0.5d0*(yel(i)+yer(i))
@@ -159,7 +165,10 @@ program main
         kern22=inte22(x+0.5d0*ds(j),y,(k+et)*dt)-inte22(x-0.5d0*ds(j),y,(k+et)*dt)-inte22(x+0.5d0*ds(j),y,(k-1+et)*dt)+inte22(x-0.5d0*ds(j),y,(k-1+et)*dt)
 
         kernt(k,j,i)=0.5d0*(kern11-kern22)*sin2+kern12*cos2
-        kernn(k,j,i)=0.5d0*(kern11+kern22)-0.5d0*(kern11-kern22)*cos2-kern12*sin2
+        !kernn(k,j,i)=0.5d0*(kern11+kern22)-0.5d0*(kern11-kern22)*cos2-kern12*sin2
+        kernn(k,j,i)=-0.5d0*(kern11+kern22)+0.5d0*(kern11-kern22)*cos2+kern12*sin2
+        !kernt(k,j,i)=inte(x+0.5d0*ds(j),(k+et)*dt)-inte(x-0.5d0*ds(j),(k+et)*dt)-inte(x+0.5d0*ds(j),(k-1+et)*dt)+inte(x-0.5d0*ds(j),(k-1+et)*dt)
+
         !if(abs(kernn(i,j,k)).le.1d-8) kernn(k,j,i)=0d0
         !write(25,'(3i6,4e15.6)') i,j,k,kernt(i,j,k),kernn(i,j,k)
       end do
@@ -167,6 +176,7 @@ program main
     end do
     !write(25,*)
   end do
+  !kernt=0.5*kernt
   !kernn=-kernn
   !write(*,*)minval(kernt),minval(kernn)
 
@@ -187,7 +197,7 @@ program main
   !do i=1,imax
   !  write(*,*) disp(i),tau(i),state(i)
   !end do
-  if(my_rank.eq.0) open(12,file='tmp2')
+  if(my_rank.eq.0) open(12,file='tmp6')
   !disp=0.d0
   ! tau=tau0
   ! do i=250,250
@@ -212,8 +222,10 @@ program main
   !initial stress as a function of angle
   do i=1,imax
     ang=-dasin(nx(i))
-    S0(i)=sxy0*cos(2*ang)+0.5d0*(sxx0-syy0)*sin(2*ang)
-    N0(i)=sin(ang)**2*sxx0+cos(ang)**2*syy0+sxy0*sin(2*ang)
+    !S0(i)=sxy0*cos(2*ang)+0.5d0*(sxx0-syy0)*sin(2*ang)
+    !N0(i)=sin(ang)**2*sxx0+cos(ang)**2*syy0+sxy0*sin(2*ang)
+    S0(i)=sxy0
+    N0(i)=syy0
   end do
 
   !nucleation
@@ -229,7 +241,7 @@ program main
   D=0d0
   rupt=0d0
   do i=1,imax
-      write(12,'(8e15.6)') 0d0,xcol(i),V(k,i),S0(i),D(i),N0(i),S0(i)/N0(i),P(i)
+      write(12,'(9e15.6)') 0d0,xcol(i),ycol(i),V(k,i),S0(i),D(i),N0(i),S0(i)/N0(i),P(i)
   end do
   write(12,*)
 
@@ -264,8 +276,8 @@ program main
 
     do i=1,imax
       N(i)=N0(i)+summng(i)
-      if(N(i).lt.10d0) N(i)=10d0
-      if(N(i).gt.190d0) N(i)=190d0
+      !if(N(i).lt.10d0) N(i)=10d0
+      !if(N(i).gt.190d0) N(i)=190d0
     end do
     !if(vel(i,k)) known, calculate stress directly
     ! do i=1,imax
@@ -275,12 +287,27 @@ program main
 
     !if(vel(i,k)) unknown, combine with friction law to solve
     do i=1,imax
+      !Forward Euler
       dpdt=fb/fdc*(fv0*exp((ff0-P(i))/fb)-V(k-1,i))
       P(i)=P(i)+dt*dpdt
-      !write(*,*) i,P(k,i)
-      !p(k,i)=p(k-1,i)+dt*(1-vel(k-1,i)*p(k-1,i)/dc)
-      lnv=rtnewt(dlog(V(k-1,i)/fv0),1d-5,N(i),P(i),S0(i),summtg(i))
+
+      !Backward
+      !past=P(i)
+      !P(i)=rtnewt_state(past,1d-5,V(k-1,i))
+      lnv=rtnewt(dlog(V(k-1,i)/fv0),1d-5,N0(i)+summng(i),P(i),S0(i),summtg(i))
       V(k,i)=fv0*exp(lnv)
+
+      ! !1st step
+      ! dpdt=fb/fdc*(fv0*exp((ff0-P(i))/fb)-V(k-1,i))
+      ! Ptmp=P(i)+0.5*dt*dpdt
+      ! lnvtmp=rtnewt(dlog(V(k-1,i)/fv0),1d-5,N0(i)+summng(i),Ptmp,S0(i),summtg(i))
+      !
+      ! !2nd step
+      ! dpdt=fb/fdc*(fv0*exp((ff0-Ptmp)/fb)-fv0*exp(lnvtmp))
+      ! P(i)=P(i)+dt*dpdt
+      ! lnv=rtnewt(lnvtmp,1d-5,N0(i)+summng(i),P(i),S0(i),summtg(i))
+      ! V(k,i)=fv0*exp(lnv)
+
       if(V(k,i).gt.0.1d0 .and. state(i).eq.0) then
         state(i)=1
         rupt(i)=t
@@ -295,9 +322,9 @@ program main
     end do
     !writing output
       !output
-      if(mod(k,10).eq.0.and.my_rank.eq.0) then
+      if(mod(k,100).eq.0.and.my_rank.eq.0) then
     do i=1,imax
-      write(12,'(8e15.6)') k*dt,xcol(i),V(k,i),S(i),D(i),N(i),S(i)/N(i),P(i)
+      write(12,'(9e15.6)') k*dt,xcol(i),ycol(i),V(k,i),S(i),D(i),N(i),S(i)/N(i),P(i)
     end do
     write(12,*)
   end if
@@ -326,6 +353,23 @@ program main
 stop
 
 contains
+  function inte(x,t)
+   implicit none
+   real(8)::x,t,ss,sp,inte,pa
+   ss=cs*t/x
+   sp=cp*t/x
+   pa=cs/cp
+   inte=0d0
+   inte=theta(x)*theta(t)
+   if(t-abs(x)/cp.ge.0.d0) then
+     inte=inte+sign(1.d0,x)/pi*(4d0/3d0*pa**3*sqrt(sp**2-1d0)**3)
+   end if
+   if(t-abs(x)/cs.ge.0.d0) then
+     inte=inte-sign(1.d0,x)/pi*(4d0/3d0*sqrt(ss**2-1d0)**3+acos(abs(x)/cs/t))
+   end if
+
+   return
+ end function
   function inte11(x1,x2,t)
     implicit none
     real(8)::x1,x2,t,ss,sp,inte11,pa,r
@@ -432,5 +476,34 @@ function rtnewt(prev,eps,nst,p,t0,sum)
   end do
   write(*,*) 'maximum iteration'
   stop
+end function
+
+function rtnewt_state(prev,eps,vel)
+  integer::j
+  integer,parameter::jmax=20
+  real(8)::rtnewt_state,prev,eps
+  real(8)::f,df,dx,vel
+  rtnewt_state=prev
+  !write(*,*) rtnewt
+  do j=1,jmax
+    x=rtnewt_state
+    f=-x+prev+fb*dt/fdc*(fv0*exp((ff0-x)/fb)-vel)
+    df=-1-dt*fv0/fdc*exp((ff0-x)/fb)
+    dx=f/df
+    rtnewt_state=rtnewt_state-dx
+    !write(*,*) rtnewt
+    if(abs(dx).lt.eps) return
+  end do
+  write(*,*) 'maximum iteration'
+  stop
+end function
+
+function bump(x)
+  implicit none
+  real(8)::bump,x,wd,ht
+  ht=0.3d0
+  wd=1d0
+  bump=ht*exp(-(x-7.0)**2/wd**2)
+  return
 end function
 end program
