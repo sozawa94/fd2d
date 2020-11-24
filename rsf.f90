@@ -20,10 +20,10 @@ program main
   real(8)::sxx0,syy0,sxy0
 
   !for fault geometry and nucleation location
-  real(8),allocatable::xcol(:),ycol(:),xel(:),xer(:),yel(:),yer(:),nx(:),ny(:),xr(:),yr(:),ds(:)
+  real(8),allocatable::xcol(:),ycol(:),xel(:),xer(:),yel(:),yer(:),nx(:),ny(:),xr(:),yr(:),ds(:),ang(:)
   real(8),allocatable::xtl(:),xtr(:),ytl(:),ytr(:)
   integer,allocatable::nm(:,:),nc(:)
-  real(8),allocatable::xcol_(:),ycol_(:),nx_(:),ny_(:)
+  real(8),allocatable::xcol_(:),ycol_(:),nx_(:),ny_(:),ang_(:)
   real(8)::hypox,hypoy !hypocenter
 
   !for MPI communication and performance evaluation
@@ -33,8 +33,8 @@ program main
 
   !others (i.e. temporal memory, variables for loops...)
   real(8),allocatable::summt(:),summn(:),summtg(:),summng(:)
-  real(8)::tmp1,tmp2,t,tp,tr,tau0,et,x,y,r,sin2,cos2,kern11,kern12,kern22,up,ur,ang
-  real(8)::factor,rad,dpdt,lnv,past,ptmp,lnvtmp
+  real(8)::tmp1,tmp2,t,tp,tr,tau0,et,x,xp,xm,y,r,sin2,cos2,kern11,kern12,kern22,up,ur
+  real(8)::factor,rad,dpdt,lnv,past,ptmp,lnvtmp,tmpxx,tmpxy,tmpyy,yp,ym
   integer::i,j,k,m,filesize,rn,nf,q
   character(128)::filename,command
 
@@ -78,7 +78,7 @@ program main
 
   !determine the number of elements and time step
   imax=sum(nc)
-  kmax=2700
+  kmax=2000
   !kmax=1000
   if(my_rank.eq.0) write(*,*) 'n,kmax',imax,kmax
 
@@ -103,8 +103,8 @@ program main
   write(*,*) imax_
 
   allocate(kernt(0:kmax,imax,imax_),kernn(0:kmax,imax,imax_),V(0:kmax,imax),P(imax),D(imax),summt(imax_),summn(imax_),S0(imax),N0(imax),summtg(imax),summng(imax),rupt(imax))
-  allocate(xcol(imax),ycol(imax),nx(imax),ny(imax),state(imax),S(imax),N(imax))
-  allocate(xcol_(imax_),ycol_(imax_),nx_(imax_),ny_(imax_),nm(imax,imax_))
+  allocate(xcol(imax),ycol(imax),nx(imax),ny(imax),ang(imax),state(imax),S(imax),N(imax))
+  allocate(xcol_(imax_),ycol_(imax_),nx_(imax_),ny_(imax_),ang_(imax_),nm(imax,imax_))
   allocate(xr(imax+1),yr(imax+1),ds(imax),xel(imax),xer(imax),yel(imax),yer(imax))
   allocate(DD(0:kmax,imax))
   !mesh generation
@@ -126,15 +126,16 @@ program main
   do i=1,imax
     yel(i)=bump(xel(i))
     yer(i)=bump(xer(i))
+    !write(*,*) yel(i),yer(i)
   end do
 
   do i=1,imax
     xcol(i)=0.5d0*(xel(i)+xer(i))
     ycol(i)=0.5d0*(yel(i)+yer(i))
     ds(i)=sqrt((xer(i)-xel(i))**2+(yer(i)-yel(i))**2)
-    ang=atan((yer(i)-yel(i))/(xer(i)-xel(i)))
-    nx(i)=-sin(ang)
-    ny(i)=cos(ang)
+    ang(i)=atan2(yer(i)-yel(i),xer(i)-xel(i))
+    nx(i)=-sin(ang(i))
+    ny(i)=cos(ang(i))
     !write(*,'(9e15.6)') xcol(i),ycol(i),xel(i),xer(i),yel(i),yer(i),nx(i),ny(i),ds(i)
    end do
    !stop
@@ -143,30 +144,62 @@ program main
    call MPI_SCATTERv(ycol,rcounts,displs,MPI_REAL8,ycol_,imax_,MPI_REAL8,0,MPI_COMM_WORLD,ierr)
    call MPI_SCATTERv(nx,rcounts,displs,MPI_REAL8,nx_,imax_,MPI_REAL8,0,MPI_COMM_WORLD,ierr)
    call MPI_SCATTERv(ny,rcounts,displs,MPI_REAL8,ny_,imax_,MPI_REAL8,0,MPI_COMM_WORLD,ierr)
+   call MPI_SCATTERv(ang,rcounts,displs,MPI_REAL8,ang_,imax_,MPI_REAL8,0,MPI_COMM_WORLD,ierr)
 
 
   !kernel computation
   time1=MPI_Wtime()
   do i=1,imax_
     do j=1,imax
-      x=ny(j)*(xcol_(i)-xcol(j))-nx(j)*(ycol_(i)-ycol(j))
-      y=nx(j)*(xcol_(i)-xcol(j))+ny(j)*(ycol_(i)-ycol(j))
-      ang=asin(nx_(i))-asin(nx(j))
-      sin2=sin(2*ang)
-      cos2=cos(2*ang)
-      rn=min(sqrt((x+0.5d0*ds(j))**2+y**2),sqrt((x-0.5d0*ds(j))**2+y**2))
+      ! x=ny(j)*(xcol_(i)-xcol(j))-nx(j)*(ycol_(i)-ycol(j))
+      ! y=nx(j)*(xcol_(i)-xcol(j))+ny(j)*(ycol_(i)-ycol(j))
+      ! ang=asin(nx_(i))-asin(nx(j))
+      ! sin2=sin(2*ang)
+      ! cos2=cos(2*ang)
+      ! rn=min(sqrt((x+0.5d0*ds(j))**2+y**2),sqrt((x-0.5d0*ds(j))**2+y**2))
+      ! nm(j,i)=max(0,ceiling(rn/cp/dt)-1)
+
+      ! xp=cos(ang(j))*(xcol_(i)-xel(j))+sin(ang(j))*(ycol_(i)-yel(j))
+      ! xm=cos(ang(j))*(xcol_(i)-xer(j))+sin(ang(j))*(ycol_(i)-yer(j))
+      ! y=-sin(ang(j))*(xcol_(i)-xer(j))+cos(ang(j))*(ycol_(i)-yer(j))
+      xp=ny(j)*(xcol_(i)-xel(j))-nx(j)*(ycol_(i)-yel(j))
+      xm=ny(j)*(xcol_(i)-xer(j))-nx(j)*(ycol_(i)-yer(j))
+      yp=nx(j)*(xcol_(i)-xel(j))+ny(j)*(ycol_(i)-yel(j))
+      ym=nx(j)*(xcol_(i)-xer(j))+ny(j)*(ycol_(i)-yer(j))
+
+      sin2=sin(2*(ang_(i)-ang(j)))
+      cos2=cos(2*(ang_(i)-ang(j)))
+      rn=min(sqrt(xp**2+y**2),sqrt(xm**2+y**2))
       nm(j,i)=max(0,ceiling(rn/cp/dt)-1)
+      !ym=-sin(ang(j))*(xcol(i)-xer(j))+cos(ang(j))*(ycol(i)-yer(j))
       !write(*,*) nm(i,j)
       !sin2=-2*nx(i)*ny(i)
       !cos2=ny(i)**2-nx(i)**2
       do k=0,kmax
-        kern11=inte11(x+0.5d0*ds(j),y,(k+et)*dt)-inte11(x-0.5d0*ds(j),y,(k+et)*dt)-inte11(x+0.5d0*ds(j),y,(k-1+et)*dt)+inte11(x-0.5d0*ds(j),y,(k-1+et)*dt)
-        kern12=inte12(x+0.5d0*ds(j),y,(k+et)*dt)-inte12(x-0.5d0*ds(j),y,(k+et)*dt)-inte12(x+0.5d0*ds(j),y,(k-1+et)*dt)+inte12(x-0.5d0*ds(j),y,(k-1+et)*dt)
-        kern22=inte22(x+0.5d0*ds(j),y,(k+et)*dt)-inte22(x-0.5d0*ds(j),y,(k+et)*dt)-inte22(x+0.5d0*ds(j),y,(k-1+et)*dt)+inte22(x-0.5d0*ds(j),y,(k-1+et)*dt)
+        ! kern11=inte11(x+0.5d0*ds(j),y,(k+et)*dt)-inte11(x-0.5d0*ds(j),y,(k+et)*dt)-inte11(x+0.5d0*ds(j),y,(k-1+et)*dt)+inte11(x-0.5d0*ds(j),y,(k-1+et)*dt)
+        ! kern12=inte12(x+0.5d0*ds(j),y,(k+et)*dt)-inte12(x-0.5d0*ds(j),y,(k+et)*dt)-inte12(x+0.5d0*ds(j),y,(k-1+et)*dt)+inte12(x-0.5d0*ds(j),y,(k-1+et)*dt)
+        ! kern22=inte22(x+0.5d0*ds(j),y,(k+et)*dt)-inte22(x-0.5d0*ds(j),y,(k+et)*dt)-inte22(x+0.5d0*ds(j),y,(k-1+et)*dt)+inte22(x-0.5d0*ds(j),y,(k-1+et)*dt)
 
-        kernt(k,j,i)=0.5d0*(kern11-kern22)*sin2+kern12*cos2
+        kern11=inte11(xp,yp,(k+et)*dt)-inte11(xm,ym,(k+et)*dt)-inte11(xp,yp,(k-1+et)*dt)+inte11(xm,ym,(k-1+et)*dt)
+        kern12=inte12(xp,yp,(k+et)*dt)-inte12(xm,ym,(k+et)*dt)-inte12(xp,yp,(k-1+et)*dt)+inte12(xm,ym,(k-1+et)*dt)
+        kern22=inte22(xp,yp,(k+et)*dt)-inte22(xm,ym,(k+et)*dt)-inte22(xp,yp,(k-1+et)*dt)+inte22(xm,ym,(k-1+et)*dt)
+
+        ! kern11=inte11s(xp,y)-inte11s(xm,y)
+        ! kern12=inte12s(xp,y)-inte12s(xm,y)
+        ! kern22=inte22s(xp,y)-inte22s(xm,y)
+
+        sin2=dsin(-2*ang(j))
+        cos2=dcos(-2*ang(j))
+        tmpxx=0.5d0*(kern11+kern22)+0.5d0*(kern11-kern22)*cos2+kern12*sin2
+        tmpxy=-0.5d0*(kern11-kern22)*sin2+kern12*cos2
+        tmpyy=0.5d0*(kern11+kern22)-0.5d0*(kern11-kern22)*cos2-kern12*sin2
+
+        kernt(k,j,i)=0.5d0*(tmpxx-tmpyy)*dsin(-2*ang_(i))+tmpxy*dcos(2*ang_(i))
+        kernn(k,j,i)=-(0.5d0*(tmpxx+tmpyy)-0.5d0*(tmpxx-tmpyy)*dcos(2*ang_(i))-tmpxy*dsin(2*ang_(i)))
+
+        !kernt(k,j,i)=0.5d0*(kern11-kern22)*sin2+kern12*cos2
         !kernn(k,j,i)=0.5d0*(kern11+kern22)-0.5d0*(kern11-kern22)*cos2-kern12*sin2
-        kernn(k,j,i)=-0.5d0*(kern11+kern22)+0.5d0*(kern11-kern22)*cos2+kern12*sin2
+        !kernn(k,j,i)=-0.5d0*(kern11+kern22)+0.5d0*(kern11-kern22)*cos2+kern12*sin2
         !kernt(k,j,i)=inte(x+0.5d0*ds(j),(k+et)*dt)-inte(x-0.5d0*ds(j),(k+et)*dt)-inte(x+0.5d0*ds(j),(k-1+et)*dt)+inte(x-0.5d0*ds(j),(k-1+et)*dt)
 
         !if(abs(kernn(i,j,k)).le.1d-8) kernn(k,j,i)=0d0
@@ -176,6 +209,7 @@ program main
     end do
     !write(25,*)
   end do
+
   !kernt=0.5*kernt
   !kernn=-kernn
   !write(*,*)minval(kernt),minval(kernn)
@@ -197,7 +231,7 @@ program main
   !do i=1,imax
   !  write(*,*) disp(i),tau(i),state(i)
   !end do
-  if(my_rank.eq.0) open(12,file='tmp6')
+  if(my_rank.eq.0) open(12,file='tmp9')
   !disp=0.d0
   ! tau=tau0
   ! do i=250,250
@@ -275,7 +309,7 @@ program main
     call MPI_ALLGATHERv(summt,imax_,MPI_REAL8,summtg,rcounts,displs,  MPI_REAL8,MPI_COMM_WORLD,ierr)
 
     do i=1,imax
-      N(i)=N0(i)+summng(i)
+      N(i)=N0(i)-0.5d0*mu/cs*summng(i)
       !if(N(i).lt.10d0) N(i)=10d0
       !if(N(i).gt.190d0) N(i)=190d0
     end do
@@ -342,7 +376,7 @@ program main
   if(my_rank.eq.0) then
     open(13,file='rupt2.dat')
     do i=1,imax
-      write(13,*) xcol(i),ycol(i),rupt(i)
+      write(13,*) xcol(i),D(i),rupt(i)
     end do
     close(13)
   end if
@@ -434,6 +468,33 @@ real(8) function theta(x)
   return
 end function
 
+function inte12s(x1,x2)
+  implicit none
+  real(8)::x1,x2,t,ss,sp,inte,pa,inte12s
+  r=sqrt(x1**2+x2**2)
+  pa=cs/cp
+  inte12s=2*cs/pi*(1-pa**2)*x1*(x1**2-x2**2)/r**4
+  return
+end function
+
+function inte11s(x1,x2)
+  implicit none
+  real(8)::x1,x2,t,ss,sp,inte,pa,inte11s
+  r=sqrt(x1**2+x2**2)
+  pa=cs/cp
+  inte11s=-2*cs/pi*(1-pa**2)*x2*(3*x1**2+x2**2)/r**4
+  return
+end function
+
+function inte22s(x1,x2)
+  implicit none
+  real(8)::x1,x2,t,ss,sp,inte,pa,inte22s
+  r=sqrt(x1**2+x2**2)
+  pa=cs/cp
+  inte22s=2*cs/pi*(1-pa**2)*x2*(x1**2-x2**2)/r**4
+  return
+end function
+
 subroutine initialcrack(hypox,hypoy,xcol,ycol,S0,imax,dx)
   implicit none
   integer,intent(in)::imax
@@ -501,7 +562,7 @@ end function
 function bump(x)
   implicit none
   real(8)::bump,x,wd,ht
-  ht=0.3d0
+  ht=0.03d0
   wd=1d0
   bump=ht*exp(-(x-7.0)**2/wd**2)
   return
