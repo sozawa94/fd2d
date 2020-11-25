@@ -21,7 +21,7 @@ program main
 
   !for fault geometry and nucleation location
   real(8),allocatable::xcol(:),ycol(:),xel(:),xer(:),yel(:),yer(:),nx(:),ny(:),xr(:),yr(:),ds(:),ang(:)
-  real(8),allocatable::xtl(:),xtr(:),ytl(:),ytr(:)
+  real(8),allocatable::xtl(:),xtr(:),ytl(:),ytr(:),data(:)
   integer,allocatable::nm(:,:),nc(:)
   real(8),allocatable::xcol_(:),ycol_(:),nx_(:),ny_(:),ang_(:)
   real(8)::hypox,hypoy !hypocenter
@@ -35,9 +35,12 @@ program main
   real(8),allocatable::summt(:),summn(:),summtg(:),summng(:)
   real(8)::tmp1,tmp2,t,tp,tr,tau0,et,x,xp,xm,y,r,sin2,cos2,kern11,kern12,kern22,up,ur
   real(8)::factor,rad,dpdt,lnv,past,ptmp,lnvtmp,tmpxx,tmpxy,tmpyy,yp,ym
-  integer::i,j,k,m,filesize,rn,nf,q
+  integer::i,j,k,m,filesize,rn,nf,q,file_size
   character(128)::filename,command
 
+  logical::icfromfile
+
+  icfromfile=.false.
   dx=0.01d0
   dt=dx*0.5d0/cs
   fdc=0.01d0
@@ -78,7 +81,7 @@ program main
 
   !determine the number of elements and time step
   imax=sum(nc)
-  kmax=2000
+  kmax=2500
   !kmax=1000
   if(my_rank.eq.0) write(*,*) 'n,kmax',imax,kmax
 
@@ -122,12 +125,29 @@ program main
     end do
   end do
 
-  !gaussian bump
+  !rough fault
+  open(32,file='N1025Lmin20seed12.curve',access='stream')
+  inquire(32, size=file_size)
+  q=file_size/8
+  write(*,*) 'q=',q
+  allocate(data(q))
+  read(32) data
+  close(32)
+  yr(1:q/4)=data(q/4+1:q/2)
   do i=1,imax
-    yel(i)=bump(xel(i))
-    yer(i)=bump(xer(i))
-    !write(*,*) yel(i),yer(i)
+    yel(i)=yr(i-1)*3
+    yer(i)=yr(i)*3
   end do
+
+  !gaussian bump
+  ! do i=1,imax
+  !   yel(i)=bump(xel(i))
+  !   yer(i)=bump(xer(i))
+  !   !write(*,*) yel(i),yer(i)
+  ! end do
+
+
+
 
   do i=1,imax
     xcol(i)=0.5d0*(xel(i)+xer(i))
@@ -210,44 +230,9 @@ program main
     !write(25,*)
   end do
 
-  !kernt=0.5*kernt
-  !kernn=-kernn
-  !write(*,*)minval(kernt),minval(kernn)
 
-  !k=kmax
-  ! if(my_rank.eq.0) then
-  !   open(25,file='kern.dat')
-  ! do k=1,kmax
-  !   write(25,'(3i6,2e15.6)') i,j,k,kernt(k,j,i),kernn(k,j,i)
-  ! end do
-  ! end if
-  !stop
-  ! do i=1,imax
-  !   write(*,*) mu/2.d0/pi*(1.d0/(dx*(i-0.5d0))-1.d0/(dx*(i+0.5d0)))
-  ! end do
-  ! stop
+  if(my_rank.eq.0) open(12,file='tmp17')
 
-
-  !do i=1,imax
-  !  write(*,*) disp(i),tau(i),state(i)
-  !end do
-  if(my_rank.eq.0) open(12,file='tmp9')
-  !disp=0.d0
-  ! tau=tau0
-  ! do i=250,250
-  !   tau(i)=th+0.001d0
-  !   state(i)=1
-  !   vel(i,0)=0.d0
-  ! end do
-  !stop
-
-  ! DD=0
-  ! do k=0,kmax
-  !   t=k*dt
-  !   do i=1,imax
-  !     if(abs(xcol(i)-5.12d0).lt.0.8*cs*t) DD(k,i)=t*sqrt(1d0-(xcol(i)-5.12d0)**2/(0.8*cs*t)**2)
-  !   end do
-  ! end do
 
   !time evolution
   time2= MPI_Wtime()
@@ -260,12 +245,20 @@ program main
     !N0(i)=sin(ang)**2*sxx0+cos(ang)**2*syy0+sxy0*sin(2*ang)
     S0(i)=sxy0
     N0(i)=syy0
+    P(i)=0.5d0
   end do
+
+  !initiai condition from file
+  if(icfromfile) then
+    open(30,file='../hbi/output/fd2d')
+    read(30) P,S0,N0
+    close(30)
+  end if
+
 
   !nucleation
   call initialcrack(hypox,hypoy,xcol,ycol,S0,imax,dx)
   t=0d0
-  P=0.5d0
   D=0d0
   do i=1,imax
     V(0,i)=fv0*exp((S0(i)/N0(i)-P(i))/fa)
@@ -562,9 +555,10 @@ end function
 function bump(x)
   implicit none
   real(8)::bump,x,wd,ht
-  ht=0.03d0
+  ht=1.0d0
   wd=1d0
   bump=ht*exp(-(x-7.0)**2/wd**2)
   return
 end function
+
 end program
