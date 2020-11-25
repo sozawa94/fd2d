@@ -81,7 +81,7 @@ program main
 
   !determine the number of elements and time step
   imax=sum(nc)
-  kmax=2500
+  kmax=3000
   !kmax=1000
   if(my_rank.eq.0) write(*,*) 'n,kmax',imax,kmax
 
@@ -135,16 +135,16 @@ program main
   close(32)
   yr(1:q/4)=data(q/4+1:q/2)
   do i=1,imax
-    yel(i)=yr(i-1)*3
-    yer(i)=yr(i)*3
+    yel(i)=yr(i-1)
+    yer(i)=yr(i)
   end do
 
   !gaussian bump
-  ! do i=1,imax
-  !   yel(i)=bump(xel(i))
-  !   yer(i)=bump(xer(i))
-  !   !write(*,*) yel(i),yer(i)
-  ! end do
+  do i=1,imax
+    yel(i)=bump(xel(i))
+    yer(i)=bump(xer(i))
+    !write(*,*) yel(i),yer(i)
+  end do
 
 
 
@@ -231,7 +231,7 @@ program main
   end do
 
 
-  if(my_rank.eq.0) open(12,file='tmp17')
+  if(my_rank.eq.0) open(12,file='tmp11')
 
 
   !time evolution
@@ -321,7 +321,7 @@ program main
       !Backward
       !past=P(i)
       !P(i)=rtnewt_state(past,1d-5,V(k-1,i))
-      lnv=rtnewt(dlog(V(k-1,i)/fv0),1d-5,N0(i)+summng(i),P(i),S0(i),summtg(i))
+      lnv=rtnewt(dlog(V(k-1,i)/fv0),1d-5,N(i),P(i),S0(i),summtg(i))
       V(k,i)=fv0*exp(lnv)
 
       ! !1st step
@@ -555,7 +555,7 @@ end function
 function bump(x)
   implicit none
   real(8)::bump,x,wd,ht
-  ht=1.0d0
+  ht=0.3d0
   wd=1d0
   bump=ht*exp(-(x-7.0)**2/wd**2)
   return
