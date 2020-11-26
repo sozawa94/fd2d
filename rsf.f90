@@ -5,6 +5,8 @@ program main
   !developed by SO OZAWA, PhD student at Univ. Tokyo
   include 'mpif.h'
 
+  integer::job
+
   !elastodynamic convolution kernel for shear and normal stress respectively.
   integer::imax,kmax
   real(8)::dt,dx
@@ -34,7 +36,7 @@ program main
   !others (i.e. temporal memory, variables for loops...)
   real(8),allocatable::summt(:),summn(:),summtg(:),summng(:)
   real(8)::tmp1,tmp2,t,tp,tr,tau0,et,x,xp,xm,y,r,sin2,cos2,kern11,kern12,kern22,up,ur
-  real(8)::factor,rad,dpdt,lnv,past,ptmp,lnvtmp,tmpxx,tmpxy,tmpyy,yp,ym
+  real(8)::factor,rad,dpdt,lnv,past,ptmp,lnvtmp,tmpxx,tmpxy,tmpyy,yp,ym,ht
   integer::i,j,k,m,filesize,rn,nf,q,file_size
   character(128)::filename,command
 
@@ -63,12 +65,14 @@ program main
   !fault geometry by input file
   call get_command_argument(1,filename,status=stat)
   open(30,file=filename)
+  read(30,*) job
   read(30,*) nf
   allocate(xtl(nf),xtr(nf),ytl(nf),ytr(nf),nc(nf))
   do i=1,nf
   read(30,*) xtl(i),ytl(i),xtr(i),ytr(i)
   end do
   read(30,*) hypox,hypoy
+  read(30,*) ht
   !xtl(1)=0d0;ytl(1)=0d0;xtr(1)=7d0;ytr(1)=0d0
   !xtl(2)=3d0;ytl(2)=-0.3d0;xtr(2)=14d0;ytr(2)=-0.3d0
   !xtl(3)=10d0;ytl(3)=0d0;xtr(3)=16d0;ytr(3)=0d0
@@ -135,14 +139,14 @@ program main
   close(32)
   yr(1:q/4)=data(q/4+1:q/2)
   do i=1,imax
-    yel(i)=yr(i-1)
-    yer(i)=yr(i)
+    yel(i)=yr(i-1)*ht
+    yer(i)=yr(i)*ht
   end do
 
   !gaussian bump
   do i=1,imax
-    yel(i)=bump(xel(i))
-    yer(i)=bump(xer(i))
+    yel(i)=bump(xel(i),1d0,ht)
+    yer(i)=bump(xer(i),1d0,ht)
     !write(*,*) yel(i),yer(i)
   end do
 
@@ -231,7 +235,8 @@ program main
   end do
 
 
-  if(my_rank.eq.0) open(12,file='tmp11')
+  write(filename,'("output/tmp",i0)') job
+  if(my_rank.eq.0) open(12,file=filename)
 
 
   !time evolution
@@ -367,7 +372,7 @@ program main
     !end if
   end do
   if(my_rank.eq.0) then
-    open(13,file='rupt2.dat')
+    open(13,file='rupt.dat')
     do i=1,imax
       write(13,*) xcol(i),D(i),rupt(i)
     end do
@@ -552,11 +557,10 @@ function rtnewt_state(prev,eps,vel)
   stop
 end function
 
-function bump(x)
+function bump(x,wd,ht)
   implicit none
   real(8)::bump,x,wd,ht
-  ht=0.3d0
-  wd=1d0
+  !ht=0.3d0
   bump=ht*exp(-(x-7.0)**2/wd**2)
   return
 end function
