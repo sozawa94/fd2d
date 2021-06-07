@@ -85,9 +85,9 @@ program main
 
   !determine the number of elements and time step
   imax=sum(nc)
-  kmax=3000
+  kmax=int(12d0/dt)
   !kmax=1000
-  if(my_rank.eq.0) write(*,*) 'n,kmax',imax,kmax
+   write(*,*) 'n,kmax',imax,kmax
 
   !MPI routine
   icomm=MPI_COMM_WORLD
@@ -130,7 +130,7 @@ program main
   end do
 
   !rough fault
-  open(32,file='N1025Lmin20seed12.curve',access='stream')
+  open(32,file='N1025Lmin20seed14.curve',access='stream')
   inquire(32, size=file_size)
   q=file_size/8
   write(*,*) 'q=',q
@@ -144,13 +144,17 @@ program main
   end do
 
   !gaussian bump
-  do i=1,imax
-    yel(i)=bump(xel(i),1d0,ht)
-    yer(i)=bump(xer(i),1d0,ht)
-    !write(*,*) yel(i),yer(i)
-  end do
-
-
+   do i=1,imax
+     yel(i)=bump(xel(i),1d0,ht)
+     yer(i)=bump(xer(i),1d0,ht)
+     !write(*,*) yel(i),yer(i)
+   end do
+  !do i=1,imax
+  !  xel(i)=dx*(i-1-imax/2)!/sqrt(1+amp**2)
+  !  xer(i)=dx*(i-imax/2)!/sqrt(1+amp**2)
+  !  yel(i)=0.1*sqrt(1.0+((xel(i)-0d0)/0.2)**2)
+  !  yer(i)=0.1*sqrt(1.0+((xer(i)-0d0)/0.2)**2)
+  !end do
 
 
   do i=1,imax
@@ -276,6 +280,7 @@ program main
       write(12,'(9e15.6)') 0d0,xcol(i),ycol(i),V(k,i),S0(i),D(i),N0(i),S0(i)/N0(i),P(i)
   end do
   write(12,*)
+  open(35,file='timerec5')
 
   do k=1,kmax
     call MPI_BARRIER(MPI_COMM_WORLD,ierr)
@@ -288,7 +293,7 @@ program main
         !if(nm(i,j).lt.k) then
         q=nm(j,i)
         !p=1
-        do m=1,k-q!k-1
+        do m=1,k-q
           if(V(m,j).ne.0d0) then
            tmp1=V(m,j)*kernt(k-m,j,i)
            tmp2=V(m,j)*kernn(k-m,j,i)
@@ -311,6 +316,7 @@ program main
       !if(N(i).lt.10d0) N(i)=10d0
       !if(N(i).gt.190d0) N(i)=190d0
     end do
+    !N=N0
     !if(vel(i,k)) known, calculate stress directly
     ! do i=1,imax
     !   !if(abs(xcol(i)-5.12d0).lt.0.8*cs*t) V(k,i)=0.1d0*(sqrt(1d0-(xcol(i)-5.12d0)**2/(0.8*cs*t)**2)+(xcol(i)-5.12d0)**2/(0.8*cs*t)**2/sqrt(1d0-(xcol(i)-5.12d0)**2/(0.8*cs*t)**2))
@@ -365,6 +371,7 @@ program main
     !write(*,*) V(k,:)
     t=t+dt
     time2= MPI_Wtime()
+    write(35,*) k,time4-time3,time2-time1
     if(mod(k,10).eq.0 .and. my_rank.eq.0) write(*,*) 'time step=',k,time2-time1,maxval(V(k,:))
     !if(maxval(V(k,:)).le.1d-4) then
     !  write(*,*) k,'slip rate zero'
@@ -509,6 +516,7 @@ subroutine initialcrack(hypox,hypoy,xcol,ycol,S0,imax,dx)
    do i=1,imax
      !xcol=dx*(i-imax/2-0.5d0)
      rr=(xcol(i)-hypox)**2+(ycol(i)-hypoy)**2
+     !rr=(i-100)**2*dx**2
      !if(rr.lt.4*lc**2) then
        S0(i)=S0(i)+amp*exp(-rr/lc**2)
      !end if
